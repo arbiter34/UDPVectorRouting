@@ -35,6 +35,8 @@ public class UDPVectorRouting {
     
     private static int[][] routingTable;
     
+    private static int[] distanceVector;
+    
     private static int[] directConnections;
     
     private static DatagramSocket socket = null;
@@ -72,16 +74,66 @@ public class UDPVectorRouting {
             }
         }
         
-        sendRoutingTable();
+        //Clear buffer
+        while (true) {            
+            byte[] data = new byte[BUFFER_SIZE];
+            DatagramPacket packet = new DatagramPacket(data, data.length);
+            try {
+                socket.receive(packet);
+            } catch (IOException e) {
+                break;
+            }
+        }
+        
+        sendDistanceVector();
+        
+        int timeoutCount = 0;
         
         while (true) {
             byte[] data = new byte[BUFFER_SIZE];
             DatagramPacket packet = new DatagramPacket(data, data.length);
-            socket.receive(packet);
-            int[] distanceVector = unpackData(packet.getData());
+            try {
+                socket.receive(packet);
+            } catch (IOException e) {
+                System.out.println("Timeout recieving data.");
+                timeoutCount++;
+                if (timeoutCount == 1) {
+                    //System.out.println("Ten consecutive timeouts, Exiting...");
+                    System.out.println("Exiting...");
+                    break;
+                }
+                continue;
+            }
+            timeoutCount = 0;
+            int[] receivedDistanceVectorData = unpackData(packet.getData());
+            int[] receivedDistanceVector = new int[] {
+                receivedDistanceVectorData[1],
+                receivedDistanceVectorData[2],
+                receivedDistanceVectorData[3]                
+            };
+            
+            System.out.println("Received distance vector from router " + ((char)(receivedDistanceVectorData[0] + 0x58)) + ": " + buildDistanceVectorString(receivedDistanceVector));
+            if (bellmanFord(receivedDistanceVectorData[0], receivedDistanceVector)) {
+                System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is updated to: ");
+                System.out.println(buildDistanceVectorString(distanceVector));
+                sendDistanceVector();
+            } else {
+                System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is not updated.");
+            }
         }
         
     }  
+    
+    private static boolean bellmanFord(int receivedInstanceNum, int[] receivedDistanceVector) {
+        boolean hasUpdated = false;
+        for (int i = 0; i < 3; i++) {
+            if (distanceVector[receivedInstanceNum] + receivedDistanceVector[i] < distanceVector[i]) {
+                distanceVector[i] = distanceVector[receivedInstanceNum] + receivedDistanceVector[i];
+                hasUpdated = true;
+            }
+        }
+        return hasUpdated;
+    }
     
     private static boolean allRoutersOnline() {
         for (int i = 0; i < 3; i++) {
@@ -92,16 +144,20 @@ public class UDPVectorRouting {
         return true;
     }
     
-    private static void printDistanceVector() {
+    private static String buildDistanceVectorString(int[] distanceVector) {
         String out = "<";
         String delimiter = "";
         for (int i = 0; i < 3; i++) {
-            out += delimiter + routingTable[instanceNum][i];
+            out += delimiter + distanceVector[i];
             delimiter = ", ";
         }
         out += ">";
+        return out;
+    }
+    
+    private static void printDistanceVector() {        
         System.out.println("Distance vector on Router " + ((char)(instanceNum + 0x58)) + " is: ");
-        System.out.println(out);
+        System.out.println(buildDistanceVectorString(distanceVector));
     }
     
     private static void sendData(byte[] data) throws IOException {        
@@ -125,7 +181,7 @@ public class UDPVectorRouting {
         
     }
     
-    private static void sendRoutingTable() throws UnknownHostException, IOException {
+    private static void sendDistanceVector() throws UnknownHostException, IOException {
         byte[] data = new byte[BUFFER_SIZE];
         packDistanceVector(data);
         sendData(data);
@@ -159,10 +215,10 @@ public class UDPVectorRouting {
         data[3] = (byte)(instanceNum >> 0);
         
         for (int i = 0; i < 3; i++) {
-            data[4 + i*4 + 0] = (byte)(routingTable[instanceNum][i] >> 24);
-            data[4 + i*4 + 1] = (byte)(routingTable[instanceNum][i] >> 16);
-            data[4 + i*4 + 2] = (byte)(routingTable[instanceNum][i] >> 8);
-            data[4 + i*4 + 3] = (byte)(routingTable[instanceNum][i] >> 0);
+            data[4 + i*4 + 0] = (byte)(distanceVector[i] >> 24);
+            data[4 + i*4 + 1] = (byte)(distanceVector[i] >> 16);
+            data[4 + i*4 + 2] = (byte)(distanceVector[i] >> 8);
+            data[4 + i*4 + 3] = (byte)(distanceVector[i] >> 0);
         }
     }
     
@@ -231,7 +287,13 @@ public class UDPVectorRouting {
         //Parse routing table
         for (int j = 0; j < 3; j++) {
             routingTable[instanceNum][j] = Integer.parseInt(line[j]);
-        }               
+        }       
+        
+        distanceVector = new int[3];
+        //Deep copy instance row from routing table
+        for (int i = 0; i < 3; i++) {
+            distanceVector[i] = routingTable[instanceNum][i];
+        }
     }
     
 }
