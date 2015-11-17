@@ -40,8 +40,11 @@ public class UDPVectorRouting {
     //Initial routing table - not necessary
     private static int[][] routingTable;
     
-    //Current distance vector for current instance
+    //Current distance vector
     private static int[] distanceVector;
+    
+    //Routes for distance vector
+    private static int[] distanceVectorRoutes;
     
     //Instances socket
     private static DatagramSocket socket = null;
@@ -62,12 +65,12 @@ public class UDPVectorRouting {
         //Debug msg
         System.out.println("Router " + ((char)(instanceNum + 0x58)) + " running on port " + port);
         System.out.println("Distance vector on Router " + ((char)(instanceNum + 0x58)) + " is: ");
-        System.out.println(buildDistanceVectorString(distanceVector));
+        System.out.println(buildDistanceVectorString(routingTable[instanceNum]));
         
         //Wait for all instances loop
         while (true) {
             //Send alive data
-            sendInitData();
+            sendDistanceVector();
             
             //If all instances checked in, break
             if (allRoutersOnline()) {
@@ -88,11 +91,16 @@ public class UDPVectorRouting {
             int[] initData = unpackData(packet.getData());
             
             //Check for ACK and Router not marked alive
-            if (initData[0] == ACK && !routersOnline[initData[1]]) {
+            if (!routersOnline[initData[0]]) {
+                
                 //Mark alive
-                routersOnline[initData[1]] = true;
+                routersOnline[initData[0]] = true;
+                
                 //Print debug msg
-                System.out.println("Router " + ((char)(initData[1] + 0x58)) + " Online.");
+                System.out.println("Router " + ((char)(initData[0] + 0x58)) + " Online.");
+                
+                //Update Routing Table           
+                setRoutingTable(initData);
             }
         }
         
@@ -109,68 +117,107 @@ public class UDPVectorRouting {
                 break;
             }
         }
-        
-        //Send initial distance vector for this instance
-        sendDistanceVector();
-        
-        while (true) {
-            //Create response packet
-            byte[] data = new byte[BUFFER_SIZE];
-            DatagramPacket packet = new DatagramPacket(data, data.length);
-            try {
-                //Receive
-                socket.receive(packet);
-            } catch (IOException e) {
-                //Timeout means we are done
-                System.out.println("Timeout recieving data.\\nExiting...");
-                break;
-            }
-            //Unpack data
-            int[] receivedDistanceVectorData = unpackData(packet.getData());
-            //Build received distance vector
-            int[] receivedDistanceVector = new int[] {
-                receivedDistanceVectorData[1],
-                receivedDistanceVectorData[2],
-                receivedDistanceVectorData[3]                
-            };
+
+        //Looping twice, once for initial distance vector run, then again after changing to value of 60 for X - Y connection
+        for (int j = 0; j < 2; j++) {     
             
-            //Debug msg
-            System.out.println("Received distance vector from router " + ((char)(receivedDistanceVectorData[0] + 0x58)) + ": " + buildDistanceVectorString(receivedDistanceVector));
-            
-            //Run bellman-ford algorithm with received data - return value signals update
-            if (bellmanFord(receivedDistanceVectorData[0], receivedDistanceVector)) {
+            //If second run, set distance between X and Y
+            if (j == 1 && (instanceNum == 0 || instanceNum == 1)) {
+                int update = 60;
+                routingTable[instanceNum][1 - instanceNum] = update;
                 
-                //Value updated - debug msgs
-                System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is updated to: ");
-                System.out.println(buildDistanceVectorString(distanceVector));
+                //Reset distanceVector
+                for (int i = 0; i < 3; i++) {
+                    distanceVector[i] = routingTable[instanceNum][i];
+                }
                 
-                //Send new distance vector
-                sendDistanceVector();
-                
-            } else {
-                //No update - debug msg
-                System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is not updated.");
+                System.out.println("Connection between " + ((char)(instanceNum + 0x58)) + " and " + ((char)(1 - instanceNum + 0x58)) + " is updated to " + update);                
+
             }
+        
+            //Send distanceVector to other routers
+            sendDistanceVector();
+
+            while (true) {
+                //Create response packet
+                byte[] data = new byte[BUFFER_SIZE];
+                DatagramPacket packet = new DatagramPacket(data, data.length);
+                try {
+                    //Receive
+                    socket.receive(packet);
+                } catch (IOException e) {
+                    //Timeout means we are done
+                    System.out.println("Timeout");
+                    break;
+                }
+                //Unpack data
+                int[] receivedDistanceVectorData = unpackData(packet.getData());
+                //Build received distance vector
+                int[] receivedDistanceVector = new int[] {
+                    receivedDistanceVectorData[1],
+                    receivedDistanceVectorData[2],
+                    receivedDistanceVectorData[3]                
+                };
+                
+                //Set updated routes for other routers
+                setRoutingTable(receivedDistanceVectorData);
+
+                //Debug msg
+                System.out.println("Received distance vector from router " + ((char)(receivedDistanceVectorData[0] + 0x58)) + ": " + buildDistanceVectorString(receivedDistanceVector));
+                
+                //Run bellman-ford algorithm with received data - return value signals update
+                if (bellmanFord()) {
+
+                    //Value updated - debug msgs
+                    System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is updated to: ");
+                    System.out.println(buildDistanceVectorString(distanceVector));
+
+                    //Send new distance vector
+                    sendDistanceVector();
+
+                } else {
+                    //No update - debug msg
+                    System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is not updated.");
+                }            
+            }
+
         }
         
     }  
     
     /*
+     * Updates Routing Table from received data, flags routes which have been updated
+     *
+     */
+    private static void setRoutingTable(int[] receivedDistanceVectorData) {
+        for (int i = 0; i < 3; i++) {
+            if (distanceVectorRoutes[i] == receivedDistanceVectorData[0] &&  routingTable[receivedDistanceVectorData[0]][i] != receivedDistanceVectorData[i+1]) {
+                distanceVectorRoutes[i] = -1;
+            }
+            routingTable[receivedDistanceVectorData[0]][i] = receivedDistanceVectorData[i+1];
+        }
+    }
+    
+    /*
      * Bellman-Ford algorithm 
      * Returns boolean indicated distance vector update
      */
-    private static boolean bellmanFord(int receivedInstanceNum, int[] receivedDistanceVector) {
+    private static boolean bellmanFord() {
         //Init to no update
         boolean hasUpdated = false;
         
-        //Iterate over each router distance
         for (int i = 0; i < 3; i++) {
-            //Check if received distance vector contains a shorter path
-            if (distanceVector[receivedInstanceNum] + receivedDistanceVector[i] < distanceVector[i]) {
-                //Update path with shorter distance
-                distanceVector[i] = distanceVector[receivedInstanceNum] + receivedDistanceVector[i];
-                //Mark updated
+            if (distanceVectorRoutes[i] == -1) {
+                distanceVector[i] = routingTable[instanceNum][i];
                 hasUpdated = true;
+                distanceVectorRoutes[i] = i;
+            }
+            for (int j = 0; j < 3; j++) {
+                if (distanceVector[i] > routingTable[j][i] + routingTable[instanceNum][j]) {
+                    hasUpdated = true;
+                    distanceVector[i] = routingTable[j][i] + routingTable[instanceNum][j];
+                    distanceVectorRoutes[i] = j;
+                }
             }
         }
         
@@ -226,21 +273,6 @@ public class UDPVectorRouting {
     }
     
     /*
-     * Helper to send initial alive data
-     */
-    private static void sendInitData() throws IOException {
-        //Build data array
-        byte[] data = new byte[BUFFER_SIZE];
-        
-        //Packet initialization data
-        packInitData(data);
-        
-        //Send
-        sendData(data);    
-        
-    }
-    
-    /*
      * Helper to send distance vector for current instance
      */
     private static void sendDistanceVector() throws UnknownHostException, IOException {
@@ -261,27 +293,11 @@ public class UDPVectorRouting {
         int[] distanceVector = new int[4];
         //Iterate over each integer
         for (int i = 0; i < 4; i++) {
-            //Bitwise join bytes to the integer
+            //Bitwise join bytes to integer
             distanceVector[i] = data[i * 4 + 0] << 24 | data[i * 4 + 1] << 16 | data[i * 4 + 2] << 8 | data[i * 4 + 3];            
         }
         //Return built array
         return distanceVector;
-    }
-    
-    /*
-     * Helper to pack initialization data into byte array 
-     */
-    private static void packInitData(byte[] data) {
-        //Big-Endian - ACK value is only a byte, zero out high bytes
-        data[0] = (byte) 0;
-        data[1] = (byte) 0;
-        data[2] = (byte) 0;
-        data[3] = ACK;
-        data[4] = (byte)(instanceNum >> 24);
-        data[5] = (byte)(instanceNum >> 16);
-        data[6] = (byte)(instanceNum >> 8);
-        data[7] = (byte)(instanceNum >> 0);
-        
     }
     
     /*
@@ -389,12 +405,17 @@ public class UDPVectorRouting {
             routingTable[instanceNum][j] = Integer.parseInt(line[j]);
         }       
         
-        //Init own distance vector to initial routing table values
         distanceVector = new int[3];
         
-        //Deep copy instance row from routing table
+        //Deep copy instance's routing vector
         for (int i = 0; i < 3; i++) {
             distanceVector[i] = routingTable[instanceNum][i];
+        }
+        
+        distanceVectorRoutes = new int[3];
+        
+        for (int i = 0; i < 3; i++) {
+            distanceVectorRoutes[i] = i;
         }
     }
     
