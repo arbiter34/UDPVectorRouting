@@ -103,11 +103,23 @@ public class UDPVectorRouting {
                 setRoutingTable(initData);
             }
         }
+        
+        //Clear buffer of alive msg's
+        while (true) {            
+            //Create response packet
+            byte[] data = new byte[BUFFER_SIZE];
+            DatagramPacket packet = new DatagramPacket(data, data.length);
+            try {
+                //Receive 
+                socket.receive(packet);
+            } catch (IOException e) {
+                //Timeout means buffer is clear, break
+                break;
+            }
+        }
 
         //Looping twice, once for initial distance vector run, then again after changing to value of 60 for X - Y connection
-        for (int j = 0; j < 2; j++) {    
-        
-            clearBuffer(); 
+        for (int j = 0; j < 2; j++) {     
             
             //If second run, set distance between X and Y
             if (j == 1 && (instanceNum == 0 || instanceNum == 1)) {
@@ -121,7 +133,7 @@ public class UDPVectorRouting {
                 
                 System.out.println("Connection between " + ((char)(instanceNum + 0x58)) + " and " + ((char)(1 - instanceNum + 0x58)) + " is updated to " + update);                
                 
-                //Run bellman-ford algorithm with received data - return value signals update
+                                //Run bellman-ford algorithm with received data - return value signals update
                 if (bellmanFord()) {
 
                     //Value updated - debug msgs
@@ -184,22 +196,6 @@ public class UDPVectorRouting {
         }
         
     }  
-    
-    private static void clearBuffer() {
-        //Clear buffer of alive msg's
-        while (true) {            
-            //Create response packet
-            byte[] data = new byte[BUFFER_SIZE];
-            DatagramPacket packet = new DatagramPacket(data, data.length);
-            try {
-                //Receive 
-                socket.receive(packet);
-            } catch (IOException e) {
-                //Timeout means buffer is clear, break
-                break;
-            }
-        }
-    }
     
     /*
      * Updates Routing Table from received data, flags routes which have been updated
