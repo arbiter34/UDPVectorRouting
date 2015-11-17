@@ -132,7 +132,22 @@ public class UDPVectorRouting {
                 }
                 
                 System.out.println("Connection between " + ((char)(instanceNum + 0x58)) + " and " + ((char)(1 - instanceNum + 0x58)) + " is updated to " + update);                
+                
+                                //Run bellman-ford algorithm with received data - return value signals update
+                if (bellmanFord()) {
 
+                    //Value updated - debug msgs
+                    System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is updated to: ");
+                    System.out.println(buildDistanceVectorString(distanceVector));
+
+                    //Send new distance vector
+                    sendDistanceVector();
+
+                } else {
+                    //No update - debug msg
+                    System.out.println("Distance vector on router " + ((char)(instanceNum + 0x58)) + " is not updated.");
+                }  
+                
             }
         
             //Send distanceVector to other routers
